@@ -99,7 +99,7 @@ def build_preprocessor(df, numeric_features=None, categorical_features=None):
     categorical_transformer = Pipeline(steps=[
         ('imputer', SimpleImputer(strategy='most_frequent')),
         # usar OneHotEncoder com handle_unknown='ignore' para evitar erros quando testar dados novos
-        ('onehot', OneHotEncoder(handle_unknown='ignore', sparse=False))
+        ('onehot', OneHotEncoder(handle_unknown='ignore'))
     ])
 
     preprocessor = ColumnTransformer(transformers=[
@@ -296,9 +296,9 @@ def extract_rf_feature_importances(rf_pipeline, numeric_features, categorical_fe
 if __name__ == "__main__":
     # Ajuste os caminhos para os seus arquivos CSV do INEP (2021,2022,2023, etc.)
     csv_paths = [
-        "microdados_censo_2021.csv",
-        "microdados_censo_2022.csv",
-        "microdados_censo_2023.csv",
+        "L_T_MICRODADOS_CADASTRO_CURSOS_2023.csv"
+        # "microdados_censo_2022.csv",
+        # "microdados_censo_2023.csv",
     ]
 
     # Leitura e concatenação simples (se esquema igual)
