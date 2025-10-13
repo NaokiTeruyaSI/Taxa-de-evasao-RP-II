@@ -19,4 +19,8 @@ df_filtrado = df[filtro_letras & filtro_grau]
 # Salvar no mesmo encoding (latin1) → Excel lê corretamente
 df_filtrado.to_csv(arquivo_saida, index=False, sep=";", encoding="latin1")
 
+colunas_to_drop =['NU_ANO_CENSO', 'NO_REGIAO', 'NO_UF', 'SG_UF', 'NO_MUNICIPIO', 
+                  'NO_CURSO', 'NO_CINE_ROTULO', 'NO_CINE_AREA_GERAL', 'NO_CINE_AREA_ESPECIFICA', 
+                  'NO_CINE_AREA_DETALHADA']
+
 print(f"Arquivo limpo gerado com sucesso: {arquivo_saida}")
