@@ -36,18 +36,18 @@ import seaborn as sns
 # 1) Funções utilitárias
 # ---------------------------
 
-def read_inep_csv(path, sep=';', encoding='latin1', usecols=None):
+def read_inep_csv(path, sep=',', encoding='latin1', usecols=None):
     """Lê CSV do INEP com separador ponto e vírgula por padrão."""
     return pd.read_csv(path, sep=sep, encoding=encoding, usecols=usecols)
 
-def filter_letras(df, course_col='NO_CURSO', code_col='CO_CURSO'):
-    """
-    Filtra linhas correspondentes a cursos de Letras.
-    Heurística: procura 'LETRAS' no nome do curso (case-insensitive) ou em outros campos.
-    Ajuste se necessário.
-    """
-    mask = df[course_col].astype(str).str.upper().str.contains('LETRAS')
-    return df[mask].copy()
+# def filter_letras(df, course_col='NO_CURSO', code_col='CO_CURSO'):
+#     """
+#     Filtra linhas correspondentes a cursos de Letras.
+#     Heurística: procura 'LETRAS' no nome do curso (case-insensitive) ou em outros campos.
+#     Ajuste se necessário.
+#     """
+#     mask = df[course_col].astype(str).str.upper().str.contains('LETRAS')
+#     return df[mask].copy()
 
 def compute_taxa_evasao(df,
                        desv_col='QT_SIT_DESVINCULADO',
@@ -294,14 +294,11 @@ def extract_rf_feature_importances(rf_pipeline, numeric_features, categorical_fe
 # ---------------------------
 
 if __name__ == "__main__":
-    # Ajuste os caminhos para os seus arquivos CSV do INEP (2021,2022,2023, etc.)
-    csv_paths = [
-        "L_T_MICRODADOS_CADASTRO_CURSOS_2023.csv"
-        # "microdados_censo_2022.csv",
-        # "microdados_censo_2023.csv",
-    ]
+    # -------------------------
+    # 1) Leitura dos dados
+    # -------------------------
+    csv_paths = ["2021_DadosInepLetras.csv"]
 
-    # Leitura e concatenação simples (se esquema igual)
     dfs = []
     for p in csv_paths:
         if os.path.exists(p):
@@ -309,88 +306,92 @@ if __name__ == "__main__":
             dfs.append(read_inep_csv(p))
         else:
             print(f"Aviso: arquivo {p} não encontrado. Ajuste o caminho.")
+
     if len(dfs) == 0:
-        raise SystemExit("Nenhum CSV lido. Por favor, coloque os microdados no caminho correto e rode novamente.")
+        raise SystemExit("Nenhum CSV lido. Verifique o caminho dos arquivos e tente novamente.")
+
+    # Concatena os datasets (caso tenha mais de um ano)
     df = pd.concat(dfs, ignore_index=True)
 
-    # Filtrar cursos de Letras (heurística)
-    df = filter_letras(df, course_col='NO_CURSO')
+    # -------------------------
+    # 2) Criação da variável alvo
+    # -------------------------
+    df = compute_taxa_evasao(
+        df,
+        desv_col='QT_SIT_DESVINCULADO',
+        trans_col='QT_SIT_TRANSFERIDO',
+        mat_col='QT_MAT',
+        out_col='taxa_evasao',
+        min_mat=5
+    )
 
-    # Criar target taxa de evasão
-    df = compute_taxa_evasao(df,
-                             desv_col='QT_SIT_DESVINCULADO',
-                             trans_col='QT_SIT_TRANSFERIDO',
-                             mat_col='QT_MAT',
-                             out_col='taxa_evasao',
-                             min_mat=5)  # exemplo: exigir pelo menos 5 matriculados
-
-    # Remover linhas sem target
+    # Remove linhas sem target
     df = df.dropna(subset=['taxa_evasao']).reset_index(drop=True)
-    print("Registros após filtragem e target criado:", len(df))
+    print("Registros após cálculo da taxa de evasão:", len(df))
 
-    # Seleção inicial de features (ajuste conforme disponibilidade)
-   # Incluir
-   # QT_VG_TOTAL	QT_VG_TOTAL_DIURNO	QT_VG_TOTAL_NOTURNO	QT_VG_TOTAL_EAD	QT_VG_NOVA	QT_VG_PROC_SELETIVO	QT_VG_REMANESC	QT_VG_PROG_ESPECIAL	QT_INSCRITO_TOTAL	QT_INSCRITO_TOTAL_DIURNO	QT_INSCRITO_TOTAL_NOTURNO	QT_INSCRITO_TOTAL_EAD	QT_INSC_VG_NOVA	QT_INSC_PROC_SELETIVO	QT_INSC_VG_REMANESC	QT_INSC_VG_PROG_ESPECIAL	QT_ING	QT_ING_FEM	QT_ING_MASC	QT_ING_DIURNO	QT_ING_NOTURNO	QT_ING_VG_NOVA	QT_ING_VESTIBULAR	QT_ING_ENEM	QT_ING_AVALIACAO_SERIADA	QT_ING_SELECAO_SIMPLIFICA	QT_ING_EGR	QT_ING_OUTRO_TIPO_SELECAO	QT_ING_PROC_SELETIVO	QT_ING_VG_REMANESC	QT_ING_VG_PROG_ESPECIAL	QT_ING_OUTRA_FORMA	QT_ING_0_17	QT_ING_18_24	QT_ING_25_29	QT_ING_30_34	QT_ING_35_39	QT_ING_40_49	QT_ING_50_59	QT_ING_60_MAIS	QT_ING_BRANCA	QT_ING_PRETA	QT_ING_PARDA	QT_ING_AMARELA	QT_ING_INDIGENA	QT_ING_CORND	QT_MAT	QT_MAT_FEM	QT_MAT_MASC	QT_MAT_DIURNO	QT_MAT_NOTURNO	QT_MAT_0_17	QT_MAT_18_24	QT_MAT_25_29	QT_MAT_30_34	QT_MAT_35_39	QT_MAT_40_49	QT_MAT_50_59	QT_MAT_60_MAIS	QT_MAT_BRANCA	QT_MAT_PRETA	QT_MAT_PARDA	QT_MAT_AMARELA	QT_MAT_INDIGENA	QT_MAT_CORND	QT_CONC	QT_CONC_FEM	QT_CONC_MASC	QT_CONC_DIURNO	QT_CONC_NOTURNO	QT_CONC_0_17	QT_CONC_18_24	QT_CONC_25_29	QT_CONC_30_34	QT_CONC_35_39	QT_CONC_40_49	QT_CONC_50_59	QT_CONC_60_MAIS	QT_CONC_BRANCA	QT_CONC_PRETA	QT_CONC_PARDA	QT_CONC_AMARELA	QT_CONC_INDIGENA	QT_CONC_CORND	QT_ING_NACBRAS	QT_ING_NACESTRANG	QT_MAT_NACBRAS	QT_MAT_NACESTRANG	QT_CONC_NACBRAS	QT_CONC_NACESTRANG	QT_ALUNO_DEFICIENTE	QT_ING_DEFICIENTE	QT_MAT_DEFICIENTE	QT_CONC_DEFICIENTE	QT_ING_FINANC	QT_ING_FINANC_REEMB	QT_ING_FIES	QT_ING_RPFIES	QT_ING_FINANC_REEMB_OUTROS	QT_ING_FINANC_NREEMB	QT_ING_PROUNII	QT_ING_PROUNIP	QT_ING_NRPFIES	QT_ING_FINANC_NREEMB_OUTROS	QT_MAT_FINANC	QT_MAT_FINANC_REEMB	QT_MAT_FIES	QT_MAT_RPFIES	QT_MAT_FINANC_REEMB_OUTROS	QT_MAT_FINANC_NREEMB	QT_MAT_PROUNII	QT_MAT_PROUNIP	QT_MAT_NRPFIES	QT_MAT_FINANC_NREEMB_OUTROS	QT_CONC_FINANC	QT_CONC_FINANC_REEMB	QT_CONC_FIES	QT_CONC_RPFIES	QT_CONC_FINANC_REEMB_OUTROS	QT_CONC_FINANC_NREEMB	QT_CONC_PROUNII	QT_CONC_PROUNIP	QT_CONC_NRPFIES	QT_CONC_FINANC_NREEMB_OUTROS	QT_ING_RESERVA_VAGA	QT_ING_RVREDEPUBLICA	QT_ING_RVETNICO	QT_ING_RVPDEF	QT_ING_RVSOCIAL_RF	QT_ING_RVOUTROS	QT_MAT_RESERVA_VAGA	QT_MAT_RVREDEPUBLICA	QT_MAT_RVETNICO	QT_MAT_RVPDEF	QT_MAT_RVSOCIAL_RF	QT_MAT_RVOUTROS	QT_CONC_RESERVA_VAGA	QT_CONC_RVREDEPUBLICA	QT_CONC_RVETNICO	QT_CONC_RVPDEF	QT_CONC_RVSOCIAL_RF	QT_CONC_RVOUTROS	QT_SIT_TRANCADA	QT_SIT_DESVINCULADO	QT_SIT_TRANSFERIDO	QT_SIT_FALECIDO	QT_ING_PROCESCPUBLICA	QT_ING_PROCESCPRIVADA	QT_ING_PROCNAOINFORMADA	QT_MAT_PROCESCPUBLICA	QT_MAT_PROCESCPRIVADA	QT_MAT_PROCNAOINFORMADA	QT_CONC_PROCESCPUBLICA	QT_CONC_PROCESCPRIVADA	QT_CONC_PROCNAOINFORMADA	QT_PARFOR	QT_ING_PARFOR	QT_MAT_PARFOR	QT_CONC_PARFOR	QT_APOIO_SOCIAL	QT_ING_APOIO_SOCIAL	QT_MAT_APOIO_SOCIAL	QT_CONC_APOIO_SOCIAL	QT_ATIV_EXTRACURRICULAR	QT_ING_ATIV_EXTRACURRICULAR	QT_MAT_ATIV_EXTRACURRICULAR	QT_CONC_ATIV_EXTRACURRICULAR	QT_MOB_ACADEMICA	QT_ING_MOB_ACADEMICA	QT_MAT_MOB_ACADEMICA	QT_CONC_MOB_ACADEMICA
-    candidate_numeric = [
-      'QT_MAT',
-        'QT_APOIO_SOCIAL', 'QT_ATIV_EXTRACURRICULAR'
-    ]
-    # garantir que existam no dataframe
-    numeric_features = [c for c in candidate_numeric if c in df.columns]
-    categorical_features = [c for c in [
-        'CO_REGIAO', 'CO_UF', 'CO_MUNICIPIO', 'IN_CAPITAL',
-        'TP_REDE', 'TP_CATEGORIA_ADMINISTRATIVA', 'TP_ORGANIZACAO_ACADEMICA',
-        'TP_MODALIDADE_ENSINO', 'TP_GRAU_ACADEMICO'
-    ] if c in df.columns]
+    # -------------------------
+    # 3) Seleção de features (todas as colunas)
+    # -------------------------
+    target_col = 'taxa_evasao'
+    all_features = [c for c in df.columns if c != target_col]
 
-    # Criar preprocessor
-    preprocessor, numeric_features, categorical_features = build_preprocessor(df,
-                                                                             numeric_features=numeric_features,
-                                                                             categorical_features=categorical_features)
+    numeric_features = df[all_features].select_dtypes(include=['number']).columns.tolist()
+    categorical_features = df[all_features].select_dtypes(include=['object', 'category']).columns.tolist()
 
-    # Separar X e y (regressão)
+    print(f"Total de colunas numéricas: {len(numeric_features)}")
+    print(f"Total de colunas categóricas: {len(categorical_features)}")
+
+    # Pré-processador
+    preprocessor, numeric_features, categorical_features = build_preprocessor(
+        df,
+        numeric_features=numeric_features,
+        categorical_features=categorical_features
+    )
+
+    # Define X e y
     X = df[numeric_features + categorical_features].copy()
-    y_reg = df['taxa_evasao'].astype(float).copy()
+    y_reg = df[target_col].astype(float).copy()
 
-    # Train/test split (regressão)
-    X_train, X_test, y_train, y_test = safe_train_test_split(X, y_reg, test_size=0.2, random_state=42)
+    # -------------------------
+    # 4) Modelagem - Regressão
+    # -------------------------
+    X_train, X_test, y_train, y_test = safe_train_test_split(
+        X, y_reg, test_size=0.2, random_state=42
+    )
 
-    # Treinar regressors
     print("Treinando modelos de regressão...")
     models_reg = train_regressors(X_train, y_train, preprocessor, do_grid=False)
 
-    # Avaliar regressors
-    print("Avaliando regressão...")
+    print("Avaliando modelos de regressão...")
     reg_res = evaluate_regression_models(models_reg, X_test, y_test)
     print(reg_res)
 
-    # Extrair importâncias de RF (se disponível)
-    if 'rf' in models_reg:
-        try:
-            fi = extract_rf_feature_importances(models_reg['rf'], numeric_features, categorical_features, top_n=40)
-            print("Top importâncias (Random Forest):")
-            print(fi.head(20).to_string(index=False))
-            # plot simples
-            plt.figure(figsize=(8,6))
-            sns.barplot(data=fi.head(20), x='importance', y='feature')
-            plt.title('Top 20 importâncias - Random Forest (regression)')
-            plt.tight_layout()
-            plt.show()
-        except Exception as e:
-            print("Não foi possível extrair importâncias:", e)
+    # Importâncias (Random Forest)
+    # if 'rf' in models_reg:
+    #     try:
+    #         fi = extract_rf_feature_importances(models_reg['rf'], numeric_features, categorical_features, top_n=40)
+    #         print("Top importâncias (Random Forest):")
+    #         print(fi.head(20).to_string(index=False))
+    #         plt.figure(figsize=(8, 6))
+    #         sns.barplot(data=fi.head(20), x='importance', y='feature')
+    #         plt.title('Top 20 Importâncias - Random Forest (Regressão)')
+    #         plt.tight_layout()
+    #         plt.show()
+    #     except Exception as e:
+    #         print("Não foi possível extrair importâncias:", e)
 
     # -------------------------
-    # Classificação opcional
+    # 5) Modelagem - Classificação opcional
     # -------------------------
-    # transformar taxa em binária (alto risco / baixo risco) usando mediana
     y_bin, thresh = make_binary_target_from_rate(df, rate_col='taxa_evasao', threshold=None)
     print("Threshold binário (mediana):", thresh)
 
     Xc = df[numeric_features + categorical_features].copy()
     yc = y_bin
 
-    # split com stratify
-    Xc_train, Xc_test, yc_train, yc_test = train_test_split(Xc, yc, test_size=0.2, random_state=42, stratify=yc)
+    Xc_train, Xc_test, yc_train, yc_test = train_test_split(
+        Xc, yc, test_size=0.2, random_state=42, stratify=yc
+    )
 
     print("Treinando classificadores...")
     models_clf = train_classifiers(Xc_train, yc_train, preprocessor, do_grid=False)
@@ -399,7 +400,9 @@ if __name__ == "__main__":
     clf_res = evaluate_classification_models(models_clf, Xc_test, yc_test)
     print(clf_res)
 
-    # salvar modelos (exemplo)
+    # -------------------------
+    # 6) Salvamento de modelos
+    # -------------------------
     os.makedirs('models', exist_ok=True)
     for name, mdl in {**models_reg, **models_clf}.items():
         fname = os.path.join('models', f'{name}.joblib')
@@ -409,4 +412,4 @@ if __name__ == "__main__":
         except Exception as e:
             print("Falha ao salvar", name, e)
 
-    print("Pipeline concluído.")
+    print("\n✅ Pipeline concluído com sucesso!")
