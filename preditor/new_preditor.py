@@ -18,7 +18,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
 
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import train_test_split, GridSearchCV
 from sklearn.pipeline import Pipeline
 from sklearn.compose import ColumnTransformer
 from sklearn.impute import SimpleImputer
@@ -35,37 +35,47 @@ from sklearn.metrics import (
 # 1) Funções utilitárias
 # ---------------------------
 
+def read_inep_csv(path, sep=';', encoding='latin1', usecols=None):
+    """Lê CSV do INEP (padrão: separador ',')."""
+    return pd.read_csv(path, sep=sep, encoding=encoding, usecols=usecols, low_memory=False)
+
 def compute_taxa_evasao(df,
                         desv_col='QT_SIT_DESVINCULADO',
                         trans_col='QT_SIT_TRANSFERIDO',
-                        mat_col='QT_MAT',
+                        ing_col='QT_ING', 
+                        fal_col='QT_SIT_FALECIDO', 
                         out_col='taxa_evasao',
                         min_mat=1):
-    """Cria a variável taxa_evasao = (desvinculado + transferido) / matriculados."""
+    """
+    Cria a variável taxa_evasao = (desvinculado + transferido) / (ingressantes - falecidos).
+    Os valores são retornados em porcentagem (0-100).
+    """
     df = df.copy()
-    # Converte para numérico de forma segura e preenche NaNs com 0 para o cálculo
-    for c in [desv_col, trans_col, mat_col]:
-        df[c] = pd.to_numeric(df[c], errors='coerce').fillna(0)
-        
-    # Cálculo da taxa, substituindo 0 matriculados por NaN para evitar divisão por zero
-    df[out_col] = (df[desv_col] + df[trans_col]) / df[mat_col].replace({0: np.nan})
     
-    # Define taxa como NaN se o número de matriculados for menor que o mínimo
-    df.loc[df[mat_col] < min_mat, out_col] = np.nan
+    # Tratamento de colunas numéricas
+    for c in [desv_col, trans_col, ing_col, fal_col]:
+        # Converte para numérico e trata NaN como 0 para o cálculo
+        df[c] = pd.to_numeric(df[c], errors='coerce').fillna(0)
+
+    # Cálculo da Evasão: (Desvinculado + Transferido) / (Ingressantes - Falecidos)
+    numerator = df[desv_col] + df[trans_col]
+    denominator = df[ing_col] - df[fal_col]
+    
+    # Previne divisão por zero e filtra bases pequenas (denominador < min_mat)
+    valid_denominator = (denominator > 0) & (denominator >= min_mat)
+    df[out_col] = np.where(valid_denominator, (numerator / denominator) * 100, np.nan)
+    
     return df
 
 def safe_train_test_split(X, y, test_size=0.2, random_state=42, stratify=None):
     """Wrapper seguro para train_test_split."""
     return train_test_split(X, y, test_size=test_size, random_state=random_state, stratify=stratify)
 
-def build_preprocessor(df, numeric_features=None, categorical_features=None):
+def build_preprocessor(df, numeric_features, categorical_features):
     """Constrói um ColumnTransformer para imputação, encoding e scaling."""
-    # Se as listas não forem fornecidas, tenta inferir os tipos.
-    if numeric_features is None:
-        # Tenta incluir Int64Dtype, que é tratada como 'number'
-        numeric_features = df.select_dtypes(include=[np.number, pd.Int64Dtype]).columns.tolist()
-    if categorical_features is None:
-        categorical_features = df.select_dtypes(include=['category']).columns.tolist()
+    # Garante que apenas colunas que existem no df sejam usadas
+    numeric_features = [f for f in numeric_features if f in df.columns]
+    categorical_features = [f for f in categorical_features if f in df.columns]
 
     numeric_transformer = Pipeline(steps=[
         ('imputer', SimpleImputer(strategy='median')),
@@ -73,23 +83,21 @@ def build_preprocessor(df, numeric_features=None, categorical_features=None):
     ])
 
     categorical_transformer = Pipeline(steps=[
-        # A estratégia 'most_frequent' é segura para 'category'
-        ('imputer', SimpleImputer(strategy='most_frequent')), 
-        # OneHotEncoder para variáveis categóricas
+        ('imputer', SimpleImputer(strategy='most_frequent')),
         ('onehot', OneHotEncoder(handle_unknown='ignore'))
     ])
 
     preprocessor = ColumnTransformer(transformers=[
         ('num', numeric_transformer, numeric_features),
         ('cat', categorical_transformer, categorical_features)
-    ], remainder='drop') # Garante que apenas as colunas especificadas sejam usadas
+    ], remainder='drop')
 
     return preprocessor, numeric_features, categorical_features
 
 # ---------------------------
-# 2) Treinamento e avaliação (Regressão)
+# 2) Treinamento e avaliação
 # ---------------------------
-
+# [As funções de treinamento e avaliação permanecem inalteradas]
 def train_regressors(X_train, y_train, preprocessor, random_state=42):
     """Treina modelos de regressão."""
     rf = RandomForestRegressor(random_state=random_state, n_jobs=-1)
@@ -118,23 +126,22 @@ def evaluate_regression_models(models, X_test, y_test):
     return pd.DataFrame(rows)
 
 # ---------------------------
-# 3) Treinamento e avaliação (Classificação binária)
+# 3) Classificação binária
 # ---------------------------
 
 def make_binary_target_from_rate(df, rate_col='taxa_evasao', threshold=None):
     """Converte taxa contínua em rótulo binário (> mediana)."""
     if threshold is None:
         threshold = df[rate_col].median(skipna=True)
-    # A variável binária é True (1) se a taxa de evasão for MAIOR que a mediana
     return (df[rate_col] > threshold).astype(int), threshold
 
 def train_classifiers(X_train, y_train, preprocessor, random_state=42):
     """Treina modelos de classificação."""
     models = {
         'LogisticRegression': Pipeline(steps=[('preproc', preprocessor),
-                                             ('lr', LogisticRegression(max_iter=1000, random_state=random_state))]),
+                                              ('lr', LogisticRegression(max_iter=1000, random_state=random_state))]),
         'RandomForestClassifier': Pipeline(steps=[('preproc', preprocessor),
-                                                 ('rfc', RandomForestClassifier(random_state=random_state, n_jobs=-1))]),
+                                                  ('rfc', RandomForestClassifier(random_state=random_state, n_jobs=-1))]),
         'MLPClassifier': Pipeline(steps=[('preproc', preprocessor),
                                          ('mlp', MLPClassifier(max_iter=500, random_state=random_state))]),
     }
@@ -150,11 +157,10 @@ def evaluate_classification_models(models, X_test, y_test):
     for name, model in models.items():
         y_pred = model.predict(X_test)
         try:
-            # Tenta calcular ROC-AUC usando probabilidades
             y_proba = model.predict_proba(X_test)[:, 1]
             roc_auc = roc_auc_score(y_test, y_proba)
         except Exception:
-            roc_auc = np.nan # ROC-AUC não disponível para modelos que não suportam predict_proba
+            roc_auc = np.nan
 
         scores = {
             'Modelo': name,
@@ -170,143 +176,83 @@ def evaluate_classification_models(models, X_test, y_test):
     return pd.DataFrame(rows)
 
 # ---------------------------
-# FUNÇÃO DE CARREGAMENTO E PRÉ-PROCESSAMENTO (NOVA)
-# ---------------------------
-
-def load_and_preprocess_data(csv_file):
-    """
-    Carrega, filtra, aplica tipagem e prepara o DataFrame para o pipeline de ML.
-    Define colunas CO_, TP_, IN_ como 'category' e QT_ como pd.Int64Dtype().
-    """
-    sep_char = ';' # Delimitador dos microdados do INEP
-
-    # Listas de prefixos para definir os tipos
-    prefixos_categoricos = ('CO_', 'TP_', 'IN_')
-    prefixos_quantitativos = ('QT_')
-    
-    # Colunas de texto (nomes) que DEVEM ser removidas após a filtragem
-    colunas_para_remover = [
-        'NU_ANO_CENSO', 'NO_REGIAO', 'NO_UF', 'SG_UF', 'NO_MUNICIPIO',
-        'NO_CINE_ROTULO', 'NO_CINE_AREA_GERAL',
-        'NO_CINE_AREA_ESPECIFICA', 'NO_CINE_AREA_DETALHADA'
-    ]
-    # Coluna usada para a filtragem de Letras, também removida
-    colunas_para_remover_e_filtrar = colunas_para_remover + ['NO_CURSO']
-
-    # --- 1. Determinação da tipagem (dtype_mapping) ---
-    dtype_mapping = {}
-    
-    # Lê APENAS o cabeçalho para obter a lista completa de colunas
-    try:
-        temp_df = pd.read_csv(csv_file, sep=sep_char, encoding='latin1', nrows=0)
-        all_cols = temp_df.columns.tolist()
-    except Exception as e:
-        print(f"Erro ao ler cabeçalho: {e}")
-        return pd.DataFrame()
-
-    colunas_manter = [c for c in all_cols if c not in colunas_para_remover]
-
-    for col in all_cols:
-        if col.startswith(prefixos_categoricos):
-            dtype_mapping[col] = 'category'
-        elif col.startswith(prefixos_quantitativos):
-            # pd.Int64Dtype permite inteiros e NaN (ideal para QT_)
-            dtype_mapping[col] = pd.Int64Dtype()
-        else:
-            # Mantém as colunas de texto (nomes) como string para leitura e filtragem
-            dtype_mapping[col] = 'string' 
-
-    # --- 2. Leitura com Tipagem e Filtragem Inicial ---
-    try:
-        df = pd.read_csv(
-            csv_file,
-            sep=sep_char,
-            encoding='latin1',
-            dtype=dtype_mapping,
-            low_memory=False
-        )
-        print(f"Dados carregados com sucesso. Total de {len(df)} registros.")
-    except Exception as e:
-        print(f"Erro ao ler o arquivo CSV: {e}")
-        return pd.DataFrame()
-
-    # --- 3. Filtragem de Linhas ---
-    # Filtrar para Licenciatura (TP_GRAU_ACADEMICO == 2)
-    df = df.loc[df['TP_GRAU_ACADEMICO'] == 2]
-
-    # Filtrar para 'Letras' no nome do curso (case insensitive)
-    df = df.loc[df['NO_CURSO'].str.contains('Letras', case=False, na=False)].copy()
-    
-    # --- 4. Remoção de Colunas de Texto ---
-    # Remove as colunas de texto (nomes) que não serão usadas no modelo
-    df = df.drop(columns=colunas_para_remover_e_filtrar, errors='ignore')
-    
-    return df
-
-# ---------------------------
 # 4) Execução principal
 # ---------------------------
 
 if __name__ == "__main__":
-    # Substituímos o arquivo genérico pelo seu arquivo INEP
-    arquivo = "MICRODADOS_CADASTRO_CURSOS_2024.CSV" 
-    
-    # -------------------------
-    # Leitura e Filtragem (NOVA LÓGICA)
-    # -------------------------
+    arquivo = "MICRODADOS_CADASTRO_CURSOS_2023.CSV"
+    target_col = 'taxa_evasao'
+
     if not os.path.exists(arquivo):
         raise SystemExit(f"Arquivo não encontrado: {arquivo}")
 
-    df = load_and_preprocess_data(arquivo)
+    # -------------------------
+    # Leitura e Filtro (Licenciatura em Letras)
+    # -------------------------
+    df = read_inep_csv(arquivo)
     
-    if df.empty:
-        raise SystemExit("O DataFrame está vazio após a leitura e filtragem inicial. Encerrando pipeline.")
+    CURSO_COL = 'NO_CURSO'
+    GRAU_COL = 'TP_GRAU_ACADEMICO' # 2 = Licenciatura
+    
+    # Filtro 1: Apenas cursos de Licenciatura
+    df_filtered = df[df[GRAU_COL] == 2].copy()
+    
+    # Filtro 2: Apenas cursos que contenham 'LETRAS' no nome (case-insensitive)
+    df_filtered = df_filtered[
+        df_filtered[CURSO_COL].astype(str).str.contains('LETRAS', case=False, na=False)
+    ].copy()
+    
+    # Colunas removidas após o filtro (agora são constantes)
+    df_filtered.drop(columns=[CURSO_COL, GRAU_COL], inplace=True, errors='ignore')
+    
+    # -------------------------
+    # Cálculo da variável alvo e tratamento de NA
+    # -------------------------
+    df_filtered = compute_taxa_evasao(df_filtered)
+    df_filtered = df_filtered.dropna(subset=[target_col]).reset_index(drop=True)
+    
+    print("✅ CSV lido e filtrado para Licenciatura em Letras com sucesso!")
+    print(f"Registros após filtro e remoção de NA: {len(df_filtered)}\n")
 
     # -------------------------
-    # Cálculo da variável alvo (Regressão)
+    # LIMPEZA E SEPARAÇÃO DE FEATURES (NOVAS REGRAS)
     # -------------------------
-    df = compute_taxa_evasao(df)
-    # Remove linhas onde a taxa de evasão é NaN (divisão por zero ou poucos matriculados)
-    df_reg = df.dropna(subset=['taxa_evasao']).reset_index(drop=True) 
-    print(f"Registros válidos para Regressão após cálculo da taxa: {len(df_reg)}")
 
+    # 1. Colunas a serem descartadas
+    columns_to_drop = ['NU_ANO_CENSO', 'SG_UF']
+    columns_to_drop.extend([col for col in df_filtered.columns if col.startswith('NO_')])
+    
+    # Remove as colunas de drop
+    df_filtered.drop(columns=columns_to_drop, inplace=True, errors='ignore')
+
+    # 2. e 3. Classificação de features
+    all_features = [c for c in df_filtered.columns if c != target_col]
+    
+    # 2. Numéricas: Apenas colunas que começam com 'QT_'
+    numeric_features = [col for col in all_features if col.startswith('QT_')]
+    
+    # 3. Categóricas: Todas as outras
+    categorical_features = [col for col in all_features if col not in numeric_features]
+
+    # Converte explicitamente as categóricas para 'object' (string) para garantir que o OneHotEncoder funcione corretamente.
+    # Isso evita que códigos numéricos (CO_, IN_, TP_) sejam tratados como números contínuos.
+    for col in categorical_features:
+        df_filtered[col] = df_filtered[col].astype(str)
+
+    print(f"🔢 Features Numéricas (QT_): {len(numeric_features)}")
+    print(f"🔠 Features Categóricas (Restantes): {len(categorical_features)}\n")
+    
     # -------------------------
     # Preparação para modelagem
     # -------------------------
-    target_col = 'taxa_evasao'
-    
-    # Separa as features usando os tipos de dados do DataFrame (mais seguro)
-    # Apenas colunas categóricas e Int64 (numéricas) são consideradas features
-    numeric_features = df_reg.select_dtypes(include=[pd.Int64Dtype, np.number]).columns.tolist()
-    categorical_features = df_reg.select_dtypes(include=['category']).columns.tolist()
-    
-    # Remove a coluna target das features
-    if target_col in numeric_features:
-        numeric_features.remove(target_col)
 
-    # Verifica se restaram features
-    if not numeric_features and not categorical_features:
-        raise SystemExit("Nenhuma feature numérica ou categórica restante após a limpeza. Encerrando.")
+    X = df_filtered[numeric_features + categorical_features]
+    y = df_filtered[target_col].astype(float)
 
-
-    # Define o pré-processador para todo o pipeline
-    preprocessor, numeric_features, categorical_features = build_preprocessor(
-        df_reg, numeric_features, categorical_features
+    preprocessor, _, _ = build_preprocessor(
+        df_filtered, numeric_features, categorical_features
     )
 
-    X = df_reg[numeric_features + categorical_features]
-    y = df_reg[target_col].astype(float) # Garante que o target é float
-
-    # Salvamento de arrays e features
-    os.makedirs("arrays_separados", exist_ok=True)
-    pd.Series(numeric_features).to_csv("arrays_separados/numeric_features.csv", index=False)
-    pd.Series(categorical_features).to_csv("arrays_separados/categorical_features.csv", index=False)
-    # Salvamento dos dados brutos (antes do pré-processamento)
-    np.save("arrays_separados/X_array_raw.npy", X.to_numpy())
-    np.save("arrays_separados/y_array.npy", y.to_numpy())
-    print("💾 Arrays brutos salvos em 'arrays_separados'\n")
-    
-    # Separação Treino/Teste
     X_train, X_test, y_train, y_test = safe_train_test_split(X, y)
 
     # -------------------------
@@ -319,23 +265,13 @@ if __name__ == "__main__":
     # -------------------------
     # Modelos de Classificação
     # -------------------------
-    print("\n🚀 Treinando modelos de classificação (taxa > mediana)...")
-    # Usa o DataFrame original (df) para calcular a mediana global
-    y_bin, threshold = make_binary_target_from_rate(df) 
-    
-    # Filtra o X para corresponder ao y_bin (que tem o mesmo índice do df original)
-    X_clf = df[numeric_features + categorical_features] 
-    
-    # Remove NaNs em X_clf (se houver algum) e alinha com y_bin
-    X_clf = X_clf.dropna() 
-    y_bin = y_bin.loc[X_clf.index] # Alinha o target com as features limpas
-    
+    print("\n🚀 Reorientando para Classificação (taxa > mediana)...")
+    y_bin, threshold = make_binary_target_from_rate(df_filtered)
     print(f"Threshold binário (mediana da taxa): {threshold:.4f}")
-    print(f"Registros válidos para Classificação: {len(X_clf)}")
 
-    # Separação Treino/Teste Classificação
+    # Re-split usando a variável alvo binária
     Xc_train, Xc_test, yc_train, yc_test = safe_train_test_split(
-        X_clf, y_bin, stratify=y_bin
+        X, y_bin, stratify=y_bin
     )
 
     models_clf = train_classifiers(Xc_train, yc_train, preprocessor)
@@ -350,9 +286,9 @@ if __name__ == "__main__":
     print("\n📊 Resultados - Classificação:")
     print(clf_results)
 
-    os.makedirs("models", exist_ok=True)
+    os.makedirs("models_letras", exist_ok=True)
     for name, mdl in {**models_reg, **models_clf}.items():
-        joblib.dump(mdl, f"models/{name}.joblib")
-        print(f"Modelo salvo: models/{name}.joblib")
+        joblib.dump(mdl, f"models_letras/{name}.joblib")
+        print(f"Modelo salvo: models_letras/{name}.joblib")
 
-    print("\n✅ Pipeline completo executado com sucesso!")
+    print("\n✅ Pipeline completo executado com sucesso para Licenciatura em Letras e limpeza rigorosa de features!")
